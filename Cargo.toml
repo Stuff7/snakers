@@ -1,0 +1,7 @@
+[package]
+name = "snakers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+readln = { git = "https://github.com/Stuff7/readlnrs", branch = "bytes" }
