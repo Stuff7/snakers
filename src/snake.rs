@@ -1,4 +1,4 @@
-use std::{fmt::Display, fmt::Write};
+use std::fmt::{self, Display, Write};
 
 #[derive(Clone, Copy)]
 pub struct Point {
@@ -29,6 +29,7 @@ pub struct Snake {
   body: Vec<Point>,
   head: usize,
   dir: Direction,
+  color: u8,
   pub speed: u8,
 }
 
@@ -41,12 +42,15 @@ impl Snake {
       })),
       head: len - 1,
       dir: Direction::Right,
+      color: 84,
       speed: 50,
     }
   }
 
-  pub fn render(&self, f: &mut String, arena: &Arena) -> std::fmt::Result {
+  pub fn render(&self, f: &mut String, arena: &Arena) -> fmt::Result {
     let mut i = self.head;
+    clr(f, self.color)?;
+
     loop {
       let prev_y = self.body[i].y >> 1;
       let prev_x = self.body[cycle_back(&self.body, &mut i)].x;
@@ -68,7 +72,8 @@ impl Snake {
         break;
       }
     }
-    Ok(())
+
+    reset(f)
   }
 
   pub fn len(&self) -> usize {
@@ -115,6 +120,14 @@ fn cycle_back<T>(v: &[T], i: &mut usize) -> usize {
   r
 }
 
+fn clr(f: &mut String, id: u8) -> fmt::Result {
+  write!(f, "\x1b[38;5;{id}m")
+}
+
+fn reset(f: &mut String) -> fmt::Result {
+  write!(f, "\x1b[0m")
+}
+
 pub struct Arena {
   pub w: u8,
   pub h: u8,
@@ -123,7 +136,7 @@ pub struct Arena {
 }
 
 impl Display for Arena {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     writeln!(f, "\x1b[{};{}H╔{:═<3$}╗", self.y, self.x, "", self.w as usize)?;
     for _ in 0..self.h {
       writeln!(f, "\x1b[{}C║\x1b[{}C║", self.x - 1, self.w)?;
