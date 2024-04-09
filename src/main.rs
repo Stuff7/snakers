@@ -1,4 +1,5 @@
 mod game;
+mod math;
 mod snake;
 
 use game::{Game, GameResult};

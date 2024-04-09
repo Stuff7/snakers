@@ -1,33 +1,12 @@
-use std::fmt::{self, Display, Write};
-
-#[derive(Clone, Copy)]
-pub struct Point {
-  x: u8,
-  y: u8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Direction {
-  Up,
-  Right,
-  Down,
-  Left,
-}
-
-impl Direction {
-  pub fn inverse(&self) -> Self {
-    match self {
-      Direction::Up => Direction::Down,
-      Direction::Right => Direction::Left,
-      Direction::Down => Direction::Up,
-      Direction::Left => Direction::Right,
-    }
-  }
-}
+use crate::math::{Direction, Point, Rng};
+use std::{
+  fmt::{self, Display, Write},
+  ops::{Deref, DerefMut},
+};
 
 pub struct Snake {
-  body: Vec<Point>,
-  head: usize,
+  pub body: Vec<Point>,
+  pub head: usize,
   dir: Direction,
   color: u8,
   pub speed: u8,
@@ -36,10 +15,7 @@ pub struct Snake {
 impl Snake {
   pub fn new(len: usize, x: u8, y: u8) -> Self {
     Self {
-      body: Vec::from_iter((0..len).map(|n| Point {
-        x: n as u8 + x + 2,
-        y: (y << 1) + 2,
-      })),
+      body: vec![Point::new(x, y); len],
       head: len - 1,
       dir: Direction::Right,
       color: 84,
@@ -47,30 +23,35 @@ impl Snake {
     }
   }
 
-  pub fn render(&self, f: &mut String, arena: &Arena) -> fmt::Result {
-    let mut i = self.head;
-    clr(f, self.color)?;
+  pub fn render(&self, f: &mut String, arena: &Arena, top: &mut Vec<ColoredPoint>, bottom: &mut Vec<ColoredPoint>) -> fmt::Result {
+    for p in &self.body {
+      let is_top = p.y % 2 == 0;
 
-    loop {
-      let prev_y = self.body[i].y >> 1;
-      let prev_x = self.body[cycle_back(&self.body, &mut i)].x;
-      let p = &self.body[i];
-      let y = p.y >> 1;
-
-      if (arena.x..arena.x + arena.w).contains(&(p.x - 1)) && (arena.y..arena.y + arena.h).contains(&(y - 1)) {
-        let c = if y == prev_y && p.x == prev_x {
-          '█'
-        } else if p.y % 2 == 0 {
-          '▀'
-        } else {
-          '▄'
+      let v = if is_top { &mut *top } else { &mut *bottom };
+      if let Some(idx) = v.iter().position(|h| p == &h.point) {
+        let h = v.swap_remove(idx);
+        // This cursor position in the terminal has it's other half already filled so we set the
+        // background to the color of that other half to allow multiple colors along the y axis halves
+        bg(f, h.color)?;
+      } else {
+        let mut h = ColoredPoint {
+          point: *p,
+          color: self.color,
         };
-        write!(f, "\x1b[{};{}H{}", y, p.x, c)?;
+
+        if is_top {
+          h.y += 1;
+        } else {
+          h.y -= 1;
+        }
+
+        let v = if is_top { &mut *bottom } else { &mut *top };
+        v.push(h);
       }
 
-      if i == self.head {
-        break;
-      }
+      fg(f, self.color)?;
+      p.offset(&arena.position).render(if is_top { '▀' } else { '▄' }, f)?;
+      reset(f)?;
     }
 
     reset(f)
@@ -81,36 +62,54 @@ impl Snake {
   }
 
   pub fn serpentine(&mut self, arena: &Arena) {
-    let (x, y) = match self.dir {
-      Direction::Up => (0, -1),
-      Direction::Right => (1, 0),
-      Direction::Down => (0, 1),
-      Direction::Left => (-1, 0),
-    };
-    self.move_head(x, y, arena);
+    let (x, y) = self.dir.coords();
+    let prev_head = self.body[cycle_back(&self.body, &mut self.head)];
+    let head = &mut self.body[self.head];
+
+    head.x = prev_head.x.wrapping_add_signed(x);
+    head.y = prev_head.y.wrapping_add_signed(y);
+
+    if head.x == u8::MAX {
+      head.x = arena.size.x - 1;
+    } else if head.x > arena.size.x - 1 {
+      head.x = 0;
+    }
+
+    if head.y == u8::MAX {
+      head.y = (arena.size.y << 1) - 1;
+    } else if head.y > (arena.size.y << 1) - 1 {
+      head.y = 0;
+    }
+  }
+
+  pub fn eat(&mut self, rng: &mut Rng, food: &mut Point, arena: &Arena) {
+    let head = &self.body[self.head];
+    if head.x == food.x && head.y == food.y {
+      self.body.push(self.body[self.head]);
+      food.randomize(rng, &arena.size);
+    }
   }
 
   pub fn steer(&mut self, dir: Direction) {
     self.dir = if self.dir.inverse() == dir { self.dir } else { dir };
   }
+}
 
-  fn move_head(&mut self, x: i8, y: i8, arena: &Arena) {
-    let prev_head = self.body[cycle_back(&self.body, &mut self.head)];
-    let head = &mut self.body[self.head];
-    head.x = prev_head.x.wrapping_add_signed(x);
-    head.y = prev_head.y.wrapping_add_signed(y);
+pub struct ColoredPoint {
+  point: Point,
+  color: u8,
+}
 
-    if head.x > arena.x + arena.w {
-      head.x = arena.x + 1;
-    } else if head.x < arena.x + 1 {
-      head.x = arena.x + arena.w;
-    }
+impl Deref for ColoredPoint {
+  type Target = Point;
+  fn deref(&self) -> &Self::Target {
+    &self.point
+  }
+}
 
-    if head.y >> 1 > (arena.y + arena.h) {
-      head.y = (arena.y << 1) + 2;
-    } else if head.y >> 1 < arena.y + 1 {
-      head.y = ((arena.y + arena.h) << 1) + 1;
-    }
+impl DerefMut for ColoredPoint {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut self.point
   }
 }
 
@@ -120,8 +119,12 @@ fn cycle_back<T>(v: &[T], i: &mut usize) -> usize {
   r
 }
 
-fn clr(f: &mut String, id: u8) -> fmt::Result {
+fn fg(f: &mut String, id: u8) -> fmt::Result {
   write!(f, "\x1b[38;5;{id}m")
+}
+
+fn bg(f: &mut String, id: u8) -> fmt::Result {
+  write!(f, "\x1b[48;5;{id}m")
 }
 
 fn reset(f: &mut String) -> fmt::Result {
@@ -129,19 +132,26 @@ fn reset(f: &mut String) -> fmt::Result {
 }
 
 pub struct Arena {
-  pub w: u8,
-  pub h: u8,
-  pub x: u8,
-  pub y: u8,
+  pub position: Point,
+  pub size: Point,
+}
+
+impl Arena {
+  pub fn new(x: u8, y: u8, w: u8, h: u8) -> Self {
+    Self {
+      position: Point::new(x, y),
+      size: Point::new(w, h),
+    }
+  }
 }
 
 impl Display for Arena {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    writeln!(f, "\x1b[{};{}H╔{:═<3$}╗", self.y, self.x, "", self.w as usize)?;
-    for _ in 0..self.h {
-      writeln!(f, "\x1b[{}C║\x1b[{}C║", self.x - 1, self.w)?;
+    writeln!(f, "\x1b[{};{}H╔{:═<3$}╗", self.position.y, self.position.x, "", self.size.x as usize)?;
+    for _ in 0..self.size.y {
+      writeln!(f, "\x1b[{}C║\x1b[{}C║", self.position.x - 1, self.size.x)?;
     }
-    writeln!(f, "\x1b[{}C╚{:═<2$}╝", self.x - 1, "", self.w as usize)?;
+    writeln!(f, "\x1b[{}C╚{:═<2$}╝", self.position.x - 1, "", self.size.x as usize)?;
     Ok(())
   }
 }

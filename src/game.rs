@@ -1,4 +1,7 @@
-use crate::snake::{Arena, Direction, Snake};
+use crate::{
+  math::{Direction, Point, Rng},
+  snake::{Arena, ColoredPoint, Snake},
+};
 use std::{
   fmt::{self, Display, Write},
   io,
@@ -7,6 +10,10 @@ use std::{
 
 pub struct Game {
   snake: Snake,
+  rng: Rng,
+  top_halves: Vec<ColoredPoint>,
+  bottom_halves: Vec<ColoredPoint>,
+  food: Point,
   arena: Arena,
   delta: Instant,
   running: bool,
@@ -23,7 +30,11 @@ impl Game {
   pub fn new(snake_len: usize, x: u8, y: u8) -> Self {
     Self {
       snake: Snake::new(snake_len, x, y),
-      arena: Arena { w: 32, h: 15, x: 2, y: 2 },
+      rng: Rng::new(),
+      top_halves: Vec::with_capacity(1 << 7),
+      bottom_halves: Vec::with_capacity(1 << 7),
+      food: Point::new(17, 0),
+      arena: Arena::new(2, 2, 32, 15),
       delta: Instant::now(),
       running: false,
       frame_duration_us: TIME_US / 30,
@@ -34,14 +45,14 @@ impl Game {
   }
 
   pub fn resize_arena(&mut self, w: u8, h: u8) -> &mut Self {
-    self.arena.w = w;
-    self.arena.h = h;
+    self.arena.size.x = w;
+    self.arena.size.y = h;
     self
   }
 
   pub fn move_arena(&mut self, x: u8, y: u8) -> &mut Self {
-    self.arena.x = x;
-    self.arena.y = y;
+    self.arena.position.x = x;
+    self.arena.position.y = y;
     self
   }
 
@@ -60,14 +71,20 @@ impl Game {
 
       if snake_delta.elapsed().as_millis() >= self.snake.speed as u128 {
         self.snake.serpentine(&self.arena);
+        self.snake.eat(&mut self.rng, &mut self.food, &self.arena);
         snake_delta = Instant::now();
       }
 
       if delta >= self.frame_duration_us {
-        self.render_stats()?;
         write!(&mut self.frame, "{}", self.arena)?;
-        self.snake.render(&mut self.frame, &self.arena)?;
+        self
+          .snake
+          .render(&mut self.frame, &self.arena, &mut self.top_halves, &mut self.bottom_halves)?;
+        self.food.offset(&self.arena.position).render("\x1b[38;5;210m󰉛\x1b[0m", &mut self.frame)?;
+        self.render_stats()?;
         println!("{}", self.frame);
+        self.top_halves.clear();
+        self.bottom_halves.clear();
         self.frame.truncate(10);
         self.delta = Instant::now() + Duration::from_micros((delta - self.frame_duration_us) as u64);
       }
@@ -88,16 +105,17 @@ impl Game {
           b'a' => self.snake.steer(Direction::Left),
           b'+' => self.snake.speed = self.snake.speed.wrapping_sub(1),
           b'-' => self.snake.speed = self.snake.speed.wrapping_add(1),
-          66 => self.arena.y = self.arena.y.saturating_add(1),
-          65 => self.arena.y = self.arena.y.saturating_sub(1),
-          67 => self.arena.x = self.arena.x.saturating_add(1),
-          68 => self.arena.x = self.arena.x.saturating_sub(1),
-          b'k' => self.arena.h = self.arena.h.saturating_add(1),
-          b'j' => self.arena.h = self.arena.h.saturating_sub(1),
-          b'l' => self.arena.w = self.arena.w.saturating_add(1),
-          b'h' => self.arena.w = self.arena.w.saturating_sub(1),
+          66 => self.arena.position.y = self.arena.position.y.saturating_add(1),
+          65 => self.arena.position.y = self.arena.position.y.saturating_sub(1),
+          67 => self.arena.position.x = self.arena.position.x.saturating_add(1),
+          68 => self.arena.position.x = self.arena.position.x.saturating_sub(1),
+          b'k' => self.arena.size.y = self.arena.size.y.saturating_add(1),
+          b'j' => self.arena.size.y = self.arena.size.y.saturating_sub(1),
+          b'l' => self.arena.size.x = self.arena.size.x.saturating_add(1),
+          b'h' => self.arena.size.x = self.arena.size.x.saturating_sub(1),
           b'f' => self.visible_fps = !self.visible_fps,
           b'q' => self.running = false,
+          b'r' => self.food.randomize(&mut self.rng, &self.arena.size),
           _ => (),
         }
       }
@@ -109,17 +127,27 @@ impl Game {
   }
 
   fn render_stats(&mut self) -> fmt::Result {
-    write!(&mut self.frame, "\x1b[{};{}H", self.arena.y - 1, self.arena.x)?;
+    write!(&mut self.frame, "\x1b[{};{}H", self.arena.position.y - 2, self.arena.position.x)?;
     if self.visible_fps {
       let fps = TIME_US / self.delta.elapsed().as_micros();
       write!(&mut self.frame, "{fps} FPS | ")?;
     }
     write!(
       &mut self.frame,
-      "SPEED: {}/255 | SIZE: {} | KEY: {}",
+      "SPEED: {}/255 | SIZE: {} | KEY: {}\x1b[{};{}H=HEAD: {:03}:{:03} | FOOD: {:03}:{:03} | ARENA: {:03}:{:03} | T: {:03} | B: {:03}=",
       255 - self.snake.speed,
       self.snake.len(),
-      self.pressed
+      self.pressed,
+      self.arena.position.y - 1,
+      self.arena.position.x,
+      self.snake.body[self.snake.head].x,
+      self.snake.body[self.snake.head].y,
+      self.food.x,
+      self.food.y,
+      self.arena.position.x,
+      self.arena.position.y,
+      self.top_halves.len(),
+      self.bottom_halves.len()
     )
   }
 }
