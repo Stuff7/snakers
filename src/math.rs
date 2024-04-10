@@ -1,7 +1,10 @@
 use std::{
   fmt::{self, Display, Write},
+  ops::Add,
   time::SystemTime,
 };
+
+use crate::esc::mv;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Point {
@@ -14,8 +17,15 @@ impl Point {
     Self { x, y }
   }
 
+  pub fn random(rng: &mut Rng, end: &Point) -> Self {
+    let mut p = Self { x: 0, y: 0 };
+    p.randomize(rng, end);
+    p
+  }
+
   pub fn render<C: Display>(&self, c: C, f: &mut String) -> fmt::Result {
-    write!(f, "\x1b[{};{}H{c}", self.y, self.x)
+    mv(f, self)?;
+    write!(f, "{c}")
   }
 
   pub fn offset(&self, p: &Point) -> Point {
@@ -25,9 +35,49 @@ impl Point {
     }
   }
 
+  pub fn quick_distance(&self, p: &Point) -> u32 {
+    self.x.abs_diff(p.x) as u32 + self.y.abs_diff(p.y) as u32
+  }
+
+  pub fn distance(&self, p: &Point) -> u32 {
+    let dx = (p.x as i32 - self.x as i32) as f32;
+    let dy = (p.y as i32 - self.y as i32) as f32;
+    dx.hypot(dy) as u32
+  }
+
+  pub fn nearest_directions(&self, target: &Point, bounds: &Point) -> [Direction; 4] {
+    let direction_h = if self.x > target.x { Direction::Left } else { Direction::Right };
+    let distance_h = target.distance(&self.add(direction_h.coords()));
+
+    let direction_v = if self.y > target.y { Direction::Up } else { Direction::Down };
+    let distance_v = target.distance(&self.add(direction_v.coords()));
+
+    if distance_h < distance_v {
+      if distance_h > ((bounds.x + 1) as u32) >> 1 {
+        [direction_h.inverse(), direction_h, direction_v, direction_v.inverse()]
+      } else {
+        [direction_h, direction_v, direction_v.inverse(), direction_h.inverse()]
+      }
+    } else if distance_v > bounds.y as u32 + 2 {
+      [direction_v.inverse(), direction_v, direction_h, direction_h.inverse()]
+    } else {
+      [direction_v, direction_h, direction_h.inverse(), direction_v.inverse()]
+    }
+  }
+
   pub fn randomize(&mut self, rng: &mut Rng, end: &Point) {
     self.x = rng.generate(end.x as usize) as u8;
     self.y = rng.generate((end.y as usize) << 1) as u8;
+  }
+}
+
+impl std::ops::Add<(i8, i8)> for Point {
+  type Output = Point;
+  fn add(self, rhs: (i8, i8)) -> Self::Output {
+    Self {
+      x: self.x.wrapping_add_signed(rhs.0),
+      y: self.y.wrapping_add_signed(rhs.1),
+    }
   }
 }
 
@@ -45,6 +95,10 @@ impl Rng {
     self.0 = self.0.wrapping_mul(LCG_MULT).wrapping_add(LCG_INCR);
     self.0 % max
   }
+
+  pub fn within(&mut self, min: usize, max: usize) -> usize {
+    self.generate(max - min) + min
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -56,6 +110,15 @@ pub enum Direction {
 }
 
 impl Direction {
+  pub fn random(rng: &mut Rng) -> Self {
+    match rng.generate(4) {
+      0 => Direction::Up,
+      1 => Direction::Right,
+      2 => Direction::Down,
+      _ => Direction::Left,
+    }
+  }
+
   pub fn inverse(&self) -> Self {
     match self {
       Direction::Up => Direction::Down,

@@ -1,6 +1,7 @@
 use crate::{
-  math::{Direction, Point, Rng},
-  snake::{Arena, ColoredPoint, Snake},
+  esc::{fg, mv, reset},
+  math::{Direction, Rng},
+  snake::{Arena, ColoredPoint, Effect, Food, Snake},
 };
 use std::{
   fmt::{self, Display, Write},
@@ -9,38 +10,32 @@ use std::{
 };
 
 pub struct Game {
-  snake: Snake,
   rng: Rng,
   top_halves: Vec<ColoredPoint>,
   bottom_halves: Vec<ColoredPoint>,
-  food: Point,
   arena: Arena,
   delta: Instant,
   running: bool,
   frame_duration_us: u128,
-  visible_fps: bool,
+  debug: bool,
   frame: String,
-  pressed: u8,
 }
 
 const CLEAR: &str = "\x1b[?25l\x1b[2J";
 const TIME_US: u128 = 1_000_000;
 
 impl Game {
-  pub fn new(snake_len: usize, x: u8, y: u8) -> Self {
+  pub fn new() -> Self {
     Self {
-      snake: Snake::new(snake_len, x, y),
       rng: Rng::new(),
       top_halves: Vec::with_capacity(1 << 7),
       bottom_halves: Vec::with_capacity(1 << 7),
-      food: Point::new(17, 0),
       arena: Arena::new(2, 2, 32, 15),
       delta: Instant::now(),
       running: false,
       frame_duration_us: TIME_US / 30,
-      visible_fps: false,
+      debug: false,
       frame: String::from(CLEAR),
-      pressed: 0,
     }
   }
 
@@ -63,25 +58,48 @@ impl Game {
 
   pub fn run(&mut self) -> GameResult {
     self.running = true;
-    let mut snake_delta = Instant::now();
+    let mut snakes: [Snake; 5] = std::array::from_fn(|i| {
+      let mut snake = Snake::random(8, &mut self.rng, &self.arena.size);
+      if i == 0 {
+        snake.name = "You";
+        snake.color = 84;
+      }
+      snake
+    });
+    let mut food = [
+      Food::random(Effect::None, &mut self.rng, &self.arena.size),
+      Food::random(Effect::Speed, &mut self.rng, &self.arena.size),
+      Food::random(Effect::Nourish, &mut self.rng, &self.arena.size),
+    ];
 
     while self.running {
-      self.handle_input()?;
+      self.handle_input(&mut snakes[0])?;
       let delta = self.delta.elapsed().as_micros();
 
-      if snake_delta.elapsed().as_millis() >= self.snake.speed as u128 {
-        self.snake.serpentine(&self.arena);
-        self.snake.eat(&mut self.rng, &mut self.food, &self.arena);
-        snake_delta = Instant::now();
+      for (i, snake) in snakes.iter_mut().enumerate() {
+        if snake.can_move() {
+          if i != 0 {
+            let food = food.iter().min_by_key(|food| snake.head().quick_distance(food)).unwrap();
+            snake.seek(food, &self.arena.size);
+          }
+          snake.serpentine(&self.arena);
+          snake.eat(&mut self.rng, &mut food, &self.arena);
+        }
       }
 
       if delta >= self.frame_duration_us {
         write!(&mut self.frame, "{}", self.arena)?;
-        self
-          .snake
-          .render(&mut self.frame, &self.arena, &mut self.top_halves, &mut self.bottom_halves)?;
-        self.food.offset(&self.arena.position).render("\x1b[38;5;210m󰉛\x1b[0m", &mut self.frame)?;
-        self.render_stats()?;
+
+        for snake in &snakes {
+          snake.render(&mut self.frame, &self.arena, &mut self.top_halves, &mut self.bottom_halves)?;
+        }
+
+        for food in &food {
+          food.render(&mut self.frame, &self.arena.position)?;
+        }
+
+        self.render_stats(&snakes[0])?;
+        self.render_scoreboard(&snakes)?;
         println!("{}", self.frame);
         self.top_halves.clear();
         self.bottom_halves.clear();
@@ -94,31 +112,38 @@ impl Game {
     Ok(())
   }
 
-  fn handle_input(&mut self) -> GameResult {
+  fn render_scoreboard(&mut self, snakes: &[Snake]) -> fmt::Result {
+    let mut scores: Box<[(u8, &str, usize)]> = snakes.iter().map(|snake| (snake.color, snake.name, snake.len())).collect();
+    scores.sort_by_key(|(_, _, score)| usize::MAX - *score);
+    let mut position = self.arena.position + (self.arena.size.x as i8 + 2, 1);
+    for (color, name, score) in scores.iter() {
+      mv(&mut self.frame, &position)?;
+      fg(&mut self.frame, *color)?;
+      position.y += 1;
+      writeln!(&mut self.frame, "{name}: {score}")?;
+    }
+    reset(&mut self.frame)
+  }
+
+  fn handle_input(&mut self, player: &mut Snake) -> GameResult {
     match readln::getch(0) {
-      Ok(b) => {
-        self.pressed = b;
-        match b {
-          b'w' => self.snake.steer(Direction::Up),
-          b'd' => self.snake.steer(Direction::Right),
-          b's' => self.snake.steer(Direction::Down),
-          b'a' => self.snake.steer(Direction::Left),
-          b'+' => self.snake.speed = self.snake.speed.wrapping_sub(1),
-          b'-' => self.snake.speed = self.snake.speed.wrapping_add(1),
-          66 => self.arena.position.y = self.arena.position.y.saturating_add(1),
-          65 => self.arena.position.y = self.arena.position.y.saturating_sub(1),
-          67 => self.arena.position.x = self.arena.position.x.saturating_add(1),
-          68 => self.arena.position.x = self.arena.position.x.saturating_sub(1),
-          b'k' => self.arena.size.y = self.arena.size.y.saturating_add(1),
-          b'j' => self.arena.size.y = self.arena.size.y.saturating_sub(1),
-          b'l' => self.arena.size.x = self.arena.size.x.saturating_add(1),
-          b'h' => self.arena.size.x = self.arena.size.x.saturating_sub(1),
-          b'f' => self.visible_fps = !self.visible_fps,
-          b'q' => self.running = false,
-          b'r' => self.food.randomize(&mut self.rng, &self.arena.size),
-          _ => (),
-        }
-      }
+      Ok(b) => match b {
+        b'w' => player.steer(Direction::Up),
+        b'd' => player.steer(Direction::Right),
+        b's' => player.steer(Direction::Down),
+        b'a' => player.steer(Direction::Left),
+        66 => self.arena.position.y = self.arena.position.y.saturating_add(1),
+        65 => self.arena.position.y = self.arena.position.y.saturating_sub(1),
+        67 => self.arena.position.x = self.arena.position.x.saturating_add(1),
+        68 => self.arena.position.x = self.arena.position.x.saturating_sub(1),
+        b'k' => self.arena.size.y = self.arena.size.y.saturating_add(1),
+        b'j' => self.arena.size.y = self.arena.size.y.saturating_sub(1),
+        b'l' => self.arena.size.x = self.arena.size.x.saturating_add(1),
+        b'h' => self.arena.size.x = self.arena.size.x.saturating_sub(1),
+        b'f' => self.debug = !self.debug,
+        b'q' => self.running = false,
+        _ => (),
+      },
       Err(err) if err.kind() == io::ErrorKind::WouldBlock => (),
       Err(err) => return Err(GameError::Io(err)),
     }
@@ -126,28 +151,28 @@ impl Game {
     Ok(())
   }
 
-  fn render_stats(&mut self) -> fmt::Result {
-    write!(&mut self.frame, "\x1b[{};{}H", self.arena.position.y - 2, self.arena.position.x)?;
-    if self.visible_fps {
+  fn render_stats(&mut self, player: &Snake) -> fmt::Result {
+    if self.debug {
       let fps = TIME_US / self.delta.elapsed().as_micros();
-      write!(&mut self.frame, "{fps} FPS | ")?;
+      mv(&mut self.frame, &(self.arena.position + (0, -2)))?;
+      write!(
+        &mut self.frame,
+        "{fps} FPS | T: {:03} | B: {:03}",
+        self.top_halves.len(),
+        self.bottom_halves.len(),
+      )?;
     }
+
+    mv(&mut self.frame, &(self.arena.position + (0, -1)))?;
     write!(
       &mut self.frame,
-      "SPEED: {}/255 | SIZE: {} | KEY: {}\x1b[{};{}H=HEAD: {:03}:{:03} | FOOD: {:03}:{:03} | ARENA: {:03}:{:03} | T: {:03} | B: {:03}=",
-      255 - self.snake.speed,
-      self.snake.len(),
-      self.pressed,
-      self.arena.position.y - 1,
-      self.arena.position.x,
-      self.snake.body[self.snake.head].x,
-      self.snake.body[self.snake.head].y,
-      self.food.x,
-      self.food.y,
-      self.arena.position.x,
-      self.arena.position.y,
-      self.top_halves.len(),
-      self.bottom_halves.len()
+      "SPEED: {}/255 | SCORE: {} | COORDS: {:03}:{:03} | ARENA SIZE: {:03}:{:03}",
+      player.speed(),
+      player.len(),
+      player.head().x,
+      player.head().y,
+      self.arena.size.x,
+      self.arena.size.y,
     )
   }
 }

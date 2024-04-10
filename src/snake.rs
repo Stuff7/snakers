@@ -1,26 +1,53 @@
+use crate::consts::SNAKE_NAMES;
+use crate::esc::{bg, fg, reset};
 use crate::math::{Direction, Point, Rng};
 use std::{
-  fmt::{self, Display, Write},
+  fmt::{self, Display},
   ops::{Deref, DerefMut},
+  time::Instant,
 };
 
 pub struct Snake {
-  pub body: Vec<Point>,
-  pub head: usize,
+  pub name: &'static str,
+  pub color: u8,
+  body: Vec<Point>,
+  head: usize,
   dir: Direction,
-  color: u8,
-  pub speed: u8,
+  speed: u8,
+  delta: Instant,
 }
 
 impl Snake {
-  pub fn new(len: usize, x: u8, y: u8) -> Self {
+  pub fn random(len: usize, rng: &mut Rng, end: &Point) -> Self {
     Self {
-      body: vec![Point::new(x, y); len],
+      name: SNAKE_NAMES[rng.generate(SNAKE_NAMES.len())],
+      color: rng.generate(255) as u8,
+      body: vec![Point::random(rng, end); len],
       head: len - 1,
-      dir: Direction::Right,
-      color: 84,
-      speed: 50,
+      dir: Direction::random(rng),
+      speed: rng.within(40, 69) as u8,
+      delta: Instant::now(),
     }
+  }
+
+  pub fn head(&self) -> &Point {
+    &self.body[self.head]
+  }
+
+  pub fn speed(&self) -> u8 {
+    u8::MAX - self.speed
+  }
+
+  pub fn can_move(&mut self) -> bool {
+    if self.delta.elapsed().as_millis() >= self.speed as u128 {
+      self.delta = Instant::now();
+      return true;
+    }
+    false
+  }
+
+  pub fn add_speed(&mut self, speed: u8) {
+    self.speed = self.speed.saturating_sub(speed);
   }
 
   pub fn render(&self, f: &mut String, arena: &Arena, top: &mut Vec<ColoredPoint>, bottom: &mut Vec<ColoredPoint>) -> fmt::Result {
@@ -82,16 +109,36 @@ impl Snake {
     }
   }
 
-  pub fn eat(&mut self, rng: &mut Rng, food: &mut Point, arena: &Arena) {
-    let head = &self.body[self.head];
-    if head.x == food.x && head.y == food.y {
-      self.body.push(self.body[self.head]);
-      food.randomize(rng, &arena.size);
+  pub fn eat(&mut self, rng: &mut Rng, food: &mut [Food], arena: &Arena) {
+    for food in food {
+      if self.body[self.head] == food.position {
+        food.apply_effect(self);
+        food.position.randomize(rng, &arena.size);
+        break;
+      }
     }
   }
 
   pub fn steer(&mut self, dir: Direction) {
     self.dir = if self.dir.inverse() == dir { self.dir } else { dir };
+  }
+
+  pub fn seek(&mut self, target: &Point, bounds: &Point) {
+    let head = &self.body[self.head];
+    for nearest in head.nearest_directions(target, bounds) {
+      if nearest == self.dir.inverse() {
+        continue;
+      }
+      let next_head = *head + nearest.coords();
+      if !self.is_crash(&next_head) {
+        self.dir = nearest;
+        break;
+      }
+    }
+  }
+
+  pub fn is_crash(&self, head: &Point) -> bool {
+    self.body.iter().any(|p| p == head)
   }
 }
 
@@ -119,18 +166,6 @@ fn cycle_back<T>(v: &[T], i: &mut usize) -> usize {
   r
 }
 
-fn fg(f: &mut String, id: u8) -> fmt::Result {
-  write!(f, "\x1b[38;5;{id}m")
-}
-
-fn bg(f: &mut String, id: u8) -> fmt::Result {
-  write!(f, "\x1b[48;5;{id}m")
-}
-
-fn reset(f: &mut String) -> fmt::Result {
-  write!(f, "\x1b[0m")
-}
-
 pub struct Arena {
   pub position: Point,
   pub size: Point,
@@ -153,5 +188,73 @@ impl Display for Arena {
     }
     writeln!(f, "\x1b[{}C╚{:═<2$}╝", self.position.x - 1, "", self.size.x as usize)?;
     Ok(())
+  }
+}
+
+#[derive(Clone, Copy)]
+pub enum Effect {
+  None,
+  Speed,
+  Nourish,
+}
+
+#[derive(Clone, Copy)]
+pub struct Food {
+  shape: char,
+  position: Point,
+  color: u8,
+  effect: Effect,
+}
+
+impl Deref for Food {
+  type Target = Point;
+  fn deref(&self) -> &Self::Target {
+    &self.position
+  }
+}
+
+impl Food {
+  pub fn new(effect: Effect, position: Point) -> Self {
+    match effect {
+      Effect::None => Self {
+        shape: '󰉛',
+        position,
+        color: 41,
+        effect,
+      },
+      Effect::Speed => Self {
+        shape: '',
+        position,
+        color: 226,
+        effect,
+      },
+      Effect::Nourish => Self {
+        shape: '󱩡',
+        position,
+        color: 213,
+        effect,
+      },
+    }
+  }
+
+  pub fn random(effect: Effect, rng: &mut Rng, end: &Point) -> Self {
+    Self::new(effect, Point::random(rng, end))
+  }
+
+  pub fn render(&self, f: &mut String, offset: &Point) -> fmt::Result {
+    fg(f, self.color)?;
+    self.position.offset(offset).render(self.shape, f)?;
+    reset(f)
+  }
+
+  pub fn apply_effect(&self, snake: &mut Snake) {
+    let mut growth = 1;
+    match self.effect {
+      Effect::None => (),
+      Effect::Speed => snake.add_speed(1),
+      Effect::Nourish => growth += 1,
+    }
+    let head = snake.body[snake.head];
+    snake.body.extend((0..growth).map(|_| head));
   }
 }
