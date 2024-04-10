@@ -16,19 +16,21 @@ pub struct Snake {
   speed: u8,
   delta: Instant,
   alive: bool,
+  strat: Strategy,
 }
 
 impl Snake {
-  pub fn random(len: usize, rng: &mut Rng, end: &Point) -> Self {
+  pub fn random(len: usize, strat: Strategy, rng: &mut Rng, end: &Point) -> Self {
     Self {
       name: SNAKE_NAMES[rng.generate(SNAKE_NAMES.len())],
-      color: rng.generate(255) as u8,
+      color: strat.color(),
       body: vec![Point::random(rng, end); len],
       head: len - 1,
       dir: Direction::random(rng),
-      speed: rng.within(40, 69) as u8,
+      speed: 55,
       delta: Instant::now(),
       alive: true,
+      strat,
     }
   }
 
@@ -139,6 +141,22 @@ impl Snake {
     self.dir = if self.dir.inverse() == dir { self.dir } else { dir };
   }
 
+  pub fn find_target(&self, snakes: &[Snake], food: &[Food]) -> Point {
+    match self.strat {
+      Strategy::Player => unreachable!("Player has it's own mind"),
+      Strategy::Speed => food.iter().find(|food| matches!(food.effect, Effect::Speed)).map(|food| food.position),
+      Strategy::Score => food.iter().find(|food| matches!(food.effect, Effect::Nourish)).map(|food| food.position),
+      Strategy::Eat => food.iter().min_by_key(|food| self.head().quick_distance(food)).map(|food| food.position),
+      Strategy::Kill => snakes
+        .iter()
+        .filter(|&snake| (!std::ptr::addr_eq(self, snake)))
+        .map(|snake| snake.head())
+        .min_by_key(|head| self.head().quick_distance(head))
+        .copied(),
+    }
+    .unwrap()
+  }
+
   pub fn seek(snakes: &mut [Snake], idx: usize, target: &Point, bounds: &Point) {
     let head = &snakes[idx].body[snakes[idx].head];
     for nearest in head.nearest_directions(target, bounds) {
@@ -204,6 +222,27 @@ impl Display for Arena {
     }
     writeln!(f, "\x1b[{}C╚{:═<2$}╝", self.position.x - 1, "", self.size.x as usize)?;
     Ok(())
+  }
+}
+
+#[derive(Clone, Copy)]
+pub enum Strategy {
+  Player,
+  Speed,
+  Score,
+  Eat,
+  Kill,
+}
+
+impl Strategy {
+  pub fn color(&self) -> u8 {
+    match self {
+      Strategy::Player => 84,
+      Strategy::Speed => 51,
+      Strategy::Score => 220,
+      Strategy::Eat => 195,
+      Strategy::Kill => 210,
+    }
   }
 }
 

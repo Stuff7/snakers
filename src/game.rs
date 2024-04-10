@@ -1,7 +1,7 @@
 use crate::{
   esc::{fg, mv, reset},
   math::{Direction, Rng},
-  snake::{Arena, ColoredPoint, Effect, Food, Snake},
+  snake::{Arena, ColoredPoint, Effect, Food, Snake, Strategy},
 };
 use std::{
   fmt::{self, Display, Write},
@@ -58,9 +58,9 @@ impl Game {
 
   pub fn run(&mut self) -> GameResult {
     self.running = true;
-    let mut snakes: [Snake; 5] = std::array::from_fn(|i| {
-      let mut snake = Snake::random(8, &mut self.rng, &self.arena.size);
-      if i == 0 {
+    let mut snakes: [Snake; 5] = [Strategy::Player, Strategy::Eat, Strategy::Kill, Strategy::Speed, Strategy::Score].map(|strat| {
+      let mut snake = Snake::random(8, strat, &mut self.rng, &self.arena.size);
+      if matches!(strat, Strategy::Player) {
         snake.name = "You";
         snake.color = 84;
       }
@@ -79,8 +79,8 @@ impl Game {
       for i in 0..snakes.len() {
         if snakes[i].can_move() {
           if i != 0 {
-            let food = food.iter().min_by_key(|food| snakes[i].head().quick_distance(food)).unwrap();
-            Snake::seek(&mut snakes, i, food, &self.arena.size);
+            let target = snakes[i].find_target(&snakes, &food);
+            Snake::seek(&mut snakes, i, &target, &self.arena.size);
           }
           Snake::serpentine(&mut snakes, i, &self.arena);
           snakes[i].eat(&mut self.rng, &mut food, &self.arena);
