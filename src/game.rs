@@ -76,14 +76,14 @@ impl Game {
       self.handle_input(&mut snakes[0])?;
       let delta = self.delta.elapsed().as_micros();
 
-      for (i, snake) in snakes.iter_mut().enumerate() {
-        if snake.can_move() {
+      for i in 0..snakes.len() {
+        if snakes[i].can_move() {
           if i != 0 {
-            let food = food.iter().min_by_key(|food| snake.head().quick_distance(food)).unwrap();
-            snake.seek(food, &self.arena.size);
+            let food = food.iter().min_by_key(|food| snakes[i].head().quick_distance(food)).unwrap();
+            Snake::seek(&mut snakes, i, food, &self.arena.size);
           }
-          snake.serpentine(&self.arena);
-          snake.eat(&mut self.rng, &mut food, &self.arena);
+          Snake::serpentine(&mut snakes, i, &self.arena);
+          snakes[i].eat(&mut self.rng, &mut food, &self.arena);
         }
       }
 

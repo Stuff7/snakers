@@ -15,6 +15,7 @@ pub struct Snake {
   dir: Direction,
   speed: u8,
   delta: Instant,
+  alive: bool,
 }
 
 impl Snake {
@@ -27,6 +28,7 @@ impl Snake {
       dir: Direction::random(rng),
       speed: rng.within(40, 69) as u8,
       delta: Instant::now(),
+      alive: true,
     }
   }
 
@@ -88,10 +90,10 @@ impl Snake {
     self.body.len()
   }
 
-  pub fn serpentine(&mut self, arena: &Arena) {
-    let (x, y) = self.dir.coords();
-    let prev_head = self.body[cycle_back(&self.body, &mut self.head)];
-    let head = &mut self.body[self.head];
+  pub fn serpentine(snakes: &mut [Snake], idx: usize, arena: &Arena) {
+    let (x, y) = snakes[idx].dir.coords();
+    let prev_head = snakes[idx].body[cycle_back(&snakes[idx].body, &mut snakes[idx].head)];
+    let mut head = snakes[idx].body[snakes[idx].head];
 
     head.x = prev_head.x.wrapping_add_signed(x);
     head.y = prev_head.y.wrapping_add_signed(y);
@@ -106,6 +108,20 @@ impl Snake {
       head.y = (arena.size.y << 1) - 1;
     } else if head.y > (arena.size.y << 1) - 1 {
       head.y = 0;
+    }
+
+    if Self::is_crash(snakes, &head) {
+      snakes[idx].alive = false;
+      snakes[idx].speed = 80;
+    }
+
+    if snakes[idx].alive {
+      snakes[idx].body[snakes[idx].head] = head;
+    } else if snakes[idx].body.len() < 3 {
+      snakes[idx].alive = true;
+    } else {
+      snakes[idx].body.swap_remove(snakes[idx].head);
+      cycle_back(&snakes[idx].body, &mut snakes[idx].head);
     }
   }
 
@@ -123,22 +139,22 @@ impl Snake {
     self.dir = if self.dir.inverse() == dir { self.dir } else { dir };
   }
 
-  pub fn seek(&mut self, target: &Point, bounds: &Point) {
-    let head = &self.body[self.head];
+  pub fn seek(snakes: &mut [Snake], idx: usize, target: &Point, bounds: &Point) {
+    let head = &snakes[idx].body[snakes[idx].head];
     for nearest in head.nearest_directions(target, bounds) {
-      if nearest == self.dir.inverse() {
+      if nearest == snakes[idx].dir.inverse() {
         continue;
       }
       let next_head = *head + nearest.coords();
-      if !self.is_crash(&next_head) {
-        self.dir = nearest;
+      if !Self::is_crash(snakes, &next_head) {
+        snakes[idx].dir = nearest;
         break;
       }
     }
   }
 
-  pub fn is_crash(&self, head: &Point) -> bool {
-    self.body.iter().any(|p| p == head)
+  pub fn is_crash(snakes: &[Snake], head: &Point) -> bool {
+    snakes.iter().any(|snake| snake.body.iter().any(|p| p == head))
   }
 }
 
