@@ -288,9 +288,9 @@ impl Display for Arena {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     writeln!(f, "\x1b[{};{}H╔{:═<3$}╗", self.position.y, self.position.x, "", self.size.x as usize)?;
     for _ in 0..self.size.y {
-      writeln!(f, "\x1b[{}C║\x1b[{}C║", self.position.x - 1, self.size.x)?;
+      writeln!(f, "\x1b[{}C║\x1b[{}C║", self.position.x.saturating_sub(1), self.size.x)?;
     }
-    writeln!(f, "\x1b[{}C╚{:═<2$}╝", self.position.x - 1, "", self.size.x as usize)?;
+    writeln!(f, "\x1b[{}C╚{:═<2$}╝", self.position.x.saturating_sub(1), "", self.size.x as usize)?;
     Ok(())
   }
 }
