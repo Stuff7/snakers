@@ -16,6 +16,7 @@ pub struct Game {
   arena: Arena,
   delta: Instant,
   running: bool,
+  paused: bool,
   frame_duration_us: u128,
   debug: bool,
   frame: String,
@@ -33,6 +34,7 @@ impl Game {
       arena: Arena::new(2, 2, 32, 15),
       delta: Instant::now(),
       running: false,
+      paused: true,
       frame_duration_us: TIME_US / 30,
       debug: false,
       frame: String::from(CLEAR),
@@ -84,14 +86,16 @@ impl Game {
       self.handle_input(&mut snakes[0])?;
       let delta = self.delta.elapsed().as_micros();
 
-      for i in 0..snakes.len() {
-        if snakes[i].can_move() {
-          if i != 0 {
-            let target = snakes[i].find_target(&snakes, &food);
-            Snake::seek(&mut snakes, i, &target, &self.arena.size);
+      if !self.paused {
+        for i in 0..snakes.len() {
+          if snakes[i].can_move() {
+            if i != 0 {
+              let target = snakes[i].find_target(&snakes, &food);
+              Snake::seek(&mut snakes, i, &target, &self.arena.size);
+            }
+            Snake::eat(&mut snakes, i, &mut self.rng, &mut food, &self.arena);
+            Snake::serpentine(&mut snakes, i, &mut self.rng, &self.arena);
           }
-          Snake::eat(&mut snakes, i, &mut self.rng, &mut food, &self.arena);
-          Snake::serpentine(&mut snakes, i, &mut self.rng, &self.arena);
         }
       }
 
@@ -106,7 +110,7 @@ impl Game {
           food.render(&mut self.frame, &self.arena.position)?;
         }
 
-        self.render_stats(&snakes[0])?;
+        self.render_ui(&snakes[0])?;
         self.render_scoreboard(&snakes)?;
         println!("{}", self.frame);
         self.top_halves.clear();
@@ -149,6 +153,7 @@ impl Game {
         b'l' => self.arena.size.x = self.arena.size.x.saturating_add(1),
         b'h' => self.arena.size.x = self.arena.size.x.saturating_sub(1),
         b'f' => self.debug = !self.debug,
+        b'p' => self.paused = !self.paused,
         b'q' => self.running = false,
         _ => (),
       },
@@ -159,7 +164,7 @@ impl Game {
     Ok(())
   }
 
-  fn render_stats(&mut self, player: &Snake) -> fmt::Result {
+  fn render_ui(&mut self, player: &Snake) -> fmt::Result {
     mv(&mut self.frame, &(self.arena.position + (0, -2)))?;
     if self.debug {
       let fps = TIME_US / self.delta.elapsed().as_micros();
@@ -173,16 +178,35 @@ impl Game {
       write!(&mut self.frame, "Press F for Debug information")?;
     }
 
+    if self.paused {
+      let mut center = self.arena.position + ((self.arena.size.x as i8 / 2) - 22, 0);
+      fg(&mut self.frame, 84)?;
+      for ln in LOGO.lines() {
+        mv(&mut self.frame, &center)?;
+        write!(&mut self.frame, "{}", ln)?;
+        center.y += 1;
+      }
+      mv(&mut self.frame, &center)?;
+      reset(&mut self.frame)?;
+      write!(&mut self.frame, "\x1b[1mControls \x1b[5m(Press P to Play)\x1b[0m")?;
+      for c in CONTROLS {
+        center.y += 1;
+        mv(&mut self.frame, &center)?;
+        write!(&mut self.frame, "{c}")?;
+      }
+    }
+
     mv(&mut self.frame, &(self.arena.position + (0, -1)))?;
     write!(
       &mut self.frame,
-      "SPEED: {}/255 | SCORE: {} | COORDS: {:03}:{:03} | ARENA SIZE: {:03}:{:03}",
+      "SPEED: {}/255 | SCORE: {} | COORDS: {:03}:{:03} | ARENA SIZE: {:03}:{:03} {:?}",
       player.speed(),
       player.len(),
       player.head().x,
       player.head().y,
       self.arena.size.x,
       self.arena.size.y,
+      player.cannibal.elapsed().as_secs(),
     )
   }
 }
@@ -218,3 +242,33 @@ impl Display for GameError {
     }
   }
 }
+
+const LOGO: &str = r#"
+  ██████  ███▄    █  ▄▄▄       ██ ▄█▀▓█████ 
+▒██    ▒  ██ ▀█   █ ▒████▄     ██▄█▒ ▓█   ▀ 
+░ ▓██▄   ▓██  ▀█ ██▒▒██  ▀█▄  ▓███▄░ ▒███   
+  ▒   ██▒▓██▒  ▐▌██▒░██▄▄▄▄██ ▓██ █▄ ▒▓█  ▄ 
+▒██████▒▒▒██░   ▓██░ ▓█   ▓██▒▒██▒ █▄░▒████▒
+▒ ▒▓▒ ▒ ░░ ▒░   ▒ ▒  ▒▒   ▓▒█░▒ ▒▒ ▓▒░░ ▒░ ░
+░ ░▒  ░ ░░ ░░   ░ ▒░  ▒   ▒▒ ░░ ░▒ ▒░ ░ ░  ░
+░  ░  ░     ░   ░ ░   ░   ▒   ░ ░░ ░    ░   
+      ░           ░       ░  ░░  ░      ░  ░
+"#;
+
+const CONTROLS: [&str; 15] = [
+  "\x1b[1mP\x1b[0m -> Play / Pause",
+  "\x1b[1mQ\x1b[0m -> Quit",
+  "\x1b[1mW\x1b[0m -> Move Up",
+  "\x1b[1mD\x1b[0m -> Move Right",
+  "\x1b[1mS\x1b[0m -> Move Down",
+  "\x1b[1mA\x1b[0m -> Move Left",
+  "\x1b[1mK\x1b[0m -> Increase Arena Height",
+  "\x1b[1mJ\x1b[0m -> Decrease Arena Height",
+  "\x1b[1mL\x1b[0m -> Increase Arena Width",
+  "\x1b[1mH\x1b[0m -> Decrease Arena Width",
+  "\x1b[1mF\x1b[0m -> Show Debug Info",
+  "\x1b[1m\x1b[0m -> Move Arena Down",
+  "\x1b[1m\x1b[0m -> Move Arena Up",
+  "\x1b[1m\x1b[0m -> Move Arena Right",
+  "\x1b[1m\x1b[0m -> Move Arena Left",
+];

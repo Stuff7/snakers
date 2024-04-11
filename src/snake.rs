@@ -18,7 +18,7 @@ pub struct Snake {
   delta: Instant,
   alive: bool,
   strat: Strategy,
-  cannibal: Instant,
+  pub cannibal: Instant,
 }
 
 impl Snake {
@@ -33,7 +33,7 @@ impl Snake {
       delta: Instant::now(),
       alive: true,
       strat,
-      cannibal: Instant::now() + Duration::from_secs(EFFECT_SECONDS),
+      cannibal: Instant::now() - Duration::from_secs(EFFECT_SECONDS),
     }
   }
 
@@ -74,7 +74,9 @@ impl Snake {
   }
 
   pub fn render(&self, f: &mut String, arena: &Arena, top: &mut Vec<ColoredPoint>, bottom: &mut Vec<ColoredPoint>) -> fmt::Result {
-    for p in &self.body {
+    let cannibal = self.is_cannibal();
+
+    for (i, p) in self.body.iter().enumerate() {
       let is_top = p.y % 2 == 0;
 
       let v = if is_top { &mut *top } else { &mut *bottom };
@@ -99,7 +101,12 @@ impl Snake {
         v.push(h);
       }
 
-      fg(f, self.color)?;
+      if cannibal && i == self.head {
+        fg(f, 196)?;
+      } else {
+        fg(f, self.color)?;
+      }
+
       p.offset(&arena.position).render(if is_top { '▀' } else { '▄' }, f)?;
       reset(f)?;
     }
@@ -134,6 +141,7 @@ impl Snake {
     let mut killer = None;
     if snakes[idx].alive && Self::is_crash(snakes, idx, &head, &mut killer) {
       snakes[idx].alive = false;
+      snakes[idx].cannibal = Instant::now() - Duration::from_secs(EFFECT_SECONDS);
       snakes[idx].speed = 80;
       if let Some(i) = killer {
         let point = *snakes[i].head();
@@ -151,12 +159,12 @@ impl Snake {
   }
 
   pub fn remove_tail(&mut self) -> bool {
-    if self.len() < 3 {
-      false
-    } else {
+    if self.len() > 3 {
       self.body.remove(self.tail_idx());
       cycle_back(&self.body, &mut self.head);
       true
+    } else {
+      false
     }
   }
 
@@ -192,7 +200,7 @@ impl Snake {
     if !matches!(self.strat, Strategy::Player) && self.is_cannibal() {
       if let Some(target) = snakes
         .iter()
-        .filter(|&snake| !std::ptr::addr_eq(self, snake) && self.speed + 4 < snake.speed && snake.len() > 2)
+        .filter(|&snake| !std::ptr::addr_eq(self, snake) && self.speed + 4 < snake.speed && snake.len() > 3)
         .map(|snake| snake.tail())
         .min_by_key(|tail| self.tail().quick_distance(tail))
         .copied()
@@ -213,10 +221,9 @@ impl Snake {
       Strategy::Kill => {
         if let Some(target) = snakes
           .iter()
-          .filter(|&snake| !std::ptr::addr_eq(self, snake) && self.speed + 8 < snake.speed)
-          .map(|snake| snake.head())
-          .min_by_key(|head| self.head().quick_distance(head))
-          .copied()
+          .filter(|&snake| !std::ptr::addr_eq(self, snake) && self.speed + 10 < snake.speed)
+          .max_by_key(|snake| snake.len())
+          .map(|snake| *snake.head())
         {
           target
         } else {
@@ -380,7 +387,7 @@ impl Food {
     let mut growth = 1;
     match self.effect {
       Effect::None => (),
-      Effect::Speed => snake.add_speed(2),
+      Effect::Speed => snake.add_speed(3),
       Effect::Nourish => growth += 1,
       Effect::Cannibal => snake.cannibal = Instant::now(),
     }
