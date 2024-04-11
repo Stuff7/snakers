@@ -1,9 +1,10 @@
 use crate::consts::SNAKE_NAMES;
 use crate::esc::{bg, fg, reset};
-use crate::math::{Direction, Point, Rng};
+use crate::math::{cycle_back, ColoredPoint, Direction, Point, Rng};
+use std::time::Duration;
 use std::{
   fmt::{self, Display},
-  ops::{Deref, DerefMut},
+  ops::Deref,
   time::Instant,
 };
 
@@ -17,6 +18,7 @@ pub struct Snake {
   delta: Instant,
   alive: bool,
   strat: Strategy,
+  cannibal: Instant,
 }
 
 impl Snake {
@@ -31,11 +33,28 @@ impl Snake {
       delta: Instant::now(),
       alive: true,
       strat,
+      cannibal: Instant::now() + Duration::from_secs(EFFECT_SECONDS),
     }
   }
 
   pub fn head(&self) -> &Point {
     &self.body[self.head]
+  }
+
+  pub fn head_mut(&mut self) -> &mut Point {
+    &mut self.body[self.head]
+  }
+
+  pub fn tail_idx(&self) -> usize {
+    if self.head == 0 {
+      self.body.len() - 1
+    } else {
+      self.head - 1
+    }
+  }
+
+  pub fn tail(&self) -> &Point {
+    &self.body[self.tail_idx()]
   }
 
   pub fn speed(&self) -> u8 {
@@ -92,7 +111,7 @@ impl Snake {
     self.body.len()
   }
 
-  pub fn serpentine(snakes: &mut [Snake], idx: usize, arena: &Arena) {
+  pub fn serpentine(snakes: &mut [Snake], idx: usize, rng: &mut Rng, arena: &Arena) {
     let (x, y) = snakes[idx].dir.coords();
     let prev_head = snakes[idx].body[cycle_back(&snakes[idx].body, &mut snakes[idx].head)];
     let mut head = snakes[idx].body[snakes[idx].head];
@@ -112,27 +131,55 @@ impl Snake {
       head.y = 0;
     }
 
-    if Self::is_crash(snakes, &head) {
+    let mut killer = None;
+    if snakes[idx].alive && Self::is_crash(snakes, idx, &head, &mut killer) {
       snakes[idx].alive = false;
       snakes[idx].speed = 80;
+      if let Some(i) = killer {
+        let point = *snakes[i].head();
+        let score = snakes[idx].len();
+        snakes[i].body.extend((0..score).map(|_| point));
+      }
     }
 
     if snakes[idx].alive {
-      snakes[idx].body[snakes[idx].head] = head;
-    } else if snakes[idx].body.len() < 3 {
+      *snakes[idx].head_mut() = head;
+    } else if !snakes[idx].remove_tail() {
       snakes[idx].alive = true;
-    } else {
-      snakes[idx].body.swap_remove(snakes[idx].head);
-      cycle_back(&snakes[idx].body, &mut snakes[idx].head);
+      snakes[idx].head_mut().randomize(rng, &arena.size)
     }
   }
 
-  pub fn eat(&mut self, rng: &mut Rng, food: &mut [Food], arena: &Arena) {
+  pub fn remove_tail(&mut self) -> bool {
+    if self.len() < 3 {
+      false
+    } else {
+      self.body.remove(self.tail_idx());
+      cycle_back(&self.body, &mut self.head);
+      true
+    }
+  }
+
+  pub fn eat(snakes: &mut [Snake], idx: usize, rng: &mut Rng, food: &mut [Food], arena: &Arena) {
     for food in food {
-      if self.body[self.head] == food.position {
-        food.apply_effect(self);
+      if *snakes[idx].head() == food.position {
+        food.apply_effect(&mut snakes[idx]);
         food.position.randomize(rng, &arena.size);
-        break;
+        return;
+      }
+    }
+
+    if snakes[idx].is_cannibal() {
+      for i in 0..snakes.len() {
+        if idx == i {
+          continue;
+        }
+
+        if *snakes[idx].head() == *snakes[i].tail() && snakes[i].remove_tail() {
+          snakes[idx].body.push(*snakes[idx].head());
+          snakes[idx].cannibal = Instant::now();
+          return;
+        }
       }
     }
   }
@@ -142,62 +189,78 @@ impl Snake {
   }
 
   pub fn find_target(&self, snakes: &[Snake], food: &[Food]) -> Point {
+    if !matches!(self.strat, Strategy::Player) && self.is_cannibal() {
+      if let Some(target) = snakes
+        .iter()
+        .filter(|&snake| !std::ptr::addr_eq(self, snake) && self.speed + 4 < snake.speed && snake.len() > 2)
+        .map(|snake| snake.tail())
+        .min_by_key(|tail| self.tail().quick_distance(tail))
+        .copied()
+      {
+        return target;
+      }
+    }
+
     match self.strat {
       Strategy::Player => unreachable!("Player has it's own mind"),
-      Strategy::Speed => food.iter().find(|food| matches!(food.effect, Effect::Speed)).map(|food| food.position),
-      Strategy::Score => food.iter().find(|food| matches!(food.effect, Effect::Nourish)).map(|food| food.position),
-      Strategy::Eat => food.iter().min_by_key(|food| self.head().quick_distance(food)).map(|food| food.position),
-      Strategy::Kill => snakes
+      Strategy::Speed => locate_food(food, Effect::Speed),
+      Strategy::Score => locate_food(food, Effect::Nourish),
+      Strategy::Eat => food
         .iter()
-        .filter(|&snake| (!std::ptr::addr_eq(self, snake)))
-        .map(|snake| snake.head())
-        .min_by_key(|head| self.head().quick_distance(head))
-        .copied(),
+        .min_by_key(|food| self.head().quick_distance(food))
+        .map(|food| food.position)
+        .unwrap(),
+      Strategy::Kill => {
+        if let Some(target) = snakes
+          .iter()
+          .filter(|&snake| !std::ptr::addr_eq(self, snake) && self.speed + 8 < snake.speed)
+          .map(|snake| snake.head())
+          .min_by_key(|head| self.head().quick_distance(head))
+          .copied()
+        {
+          target
+        } else {
+          locate_food(food, Effect::Speed)
+        }
+      }
+      Strategy::Cannibal => locate_food(food, if self.is_cannibal() { Effect::Speed } else { Effect::Cannibal }),
     }
-    .unwrap()
+  }
+
+  pub fn is_cannibal(&self) -> bool {
+    self.cannibal.elapsed().as_secs() < EFFECT_SECONDS
   }
 
   pub fn seek(snakes: &mut [Snake], idx: usize, target: &Point, bounds: &Point) {
-    let head = &snakes[idx].body[snakes[idx].head];
-    for nearest in head.nearest_directions(target, bounds) {
+    for nearest in snakes[idx].head().nearest_directions(target, bounds) {
       if nearest == snakes[idx].dir.inverse() {
         continue;
       }
-      let next_head = *head + nearest.coords();
-      if !Self::is_crash(snakes, &next_head) {
+      let next_head = *snakes[idx].head() + nearest.coords();
+      if !Self::is_crash(snakes, idx, &next_head, &mut None) {
         snakes[idx].dir = nearest;
         break;
       }
     }
   }
 
-  pub fn is_crash(snakes: &[Snake], head: &Point) -> bool {
-    snakes.iter().any(|snake| snake.body.iter().any(|p| p == head))
+  pub fn is_crash(snakes: &[Snake], idx: usize, head: &Point, killer: &mut Option<usize>) -> bool {
+    let cannibal = snakes[idx].is_cannibal();
+
+    let ret = snakes.iter().enumerate().any(|(i, snake)| {
+      let crashed = snake
+        .body
+        .iter()
+        .enumerate()
+        .any(|(i, p)| !(cannibal && i == snake.tail_idx()) && p == head);
+      if crashed && idx != i {
+        *killer = Some(i);
+      }
+      crashed
+    });
+
+    ret
   }
-}
-
-pub struct ColoredPoint {
-  point: Point,
-  color: u8,
-}
-
-impl Deref for ColoredPoint {
-  type Target = Point;
-  fn deref(&self) -> &Self::Target {
-    &self.point
-  }
-}
-
-impl DerefMut for ColoredPoint {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    &mut self.point
-  }
-}
-
-fn cycle_back<T>(v: &[T], i: &mut usize) -> usize {
-  let r = *i;
-  *i = if r == 0 { v.len() - 1 } else { r - 1 };
-  r
 }
 
 pub struct Arena {
@@ -232,6 +295,7 @@ pub enum Strategy {
   Score,
   Eat,
   Kill,
+  Cannibal,
 }
 
 impl Strategy {
@@ -239,19 +303,23 @@ impl Strategy {
     match self {
       Strategy::Player => 84,
       Strategy::Speed => 51,
-      Strategy::Score => 220,
+      Strategy::Score => 208,
       Strategy::Eat => 195,
       Strategy::Kill => 210,
+      Strategy::Cannibal => 190,
     }
   }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum Effect {
   None,
   Speed,
   Nourish,
+  Cannibal,
 }
+
+const EFFECT_SECONDS: u64 = 10;
 
 #[derive(Clone, Copy)]
 pub struct Food {
@@ -289,6 +357,12 @@ impl Food {
         color: 213,
         effect,
       },
+      Effect::Cannibal => Self {
+        shape: '',
+        position,
+        color: 167,
+        effect,
+      },
     }
   }
 
@@ -306,10 +380,15 @@ impl Food {
     let mut growth = 1;
     match self.effect {
       Effect::None => (),
-      Effect::Speed => snake.add_speed(1),
+      Effect::Speed => snake.add_speed(2),
       Effect::Nourish => growth += 1,
+      Effect::Cannibal => snake.cannibal = Instant::now(),
     }
     let head = snake.body[snake.head];
     snake.body.extend((0..growth).map(|_| head));
   }
+}
+
+pub fn locate_food(food: &[Food], effect: Effect) -> Point {
+  food.iter().find(|food| food.effect == effect).map(|food| food.position).unwrap()
 }

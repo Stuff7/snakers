@@ -1,6 +1,6 @@
 use std::{
   fmt::{self, Display, Write},
-  ops::Add,
+  ops::{Add, Deref, DerefMut},
   time::SystemTime,
 };
 
@@ -95,10 +95,30 @@ impl Rng {
     self.0 = self.0.wrapping_mul(LCG_MULT).wrapping_add(LCG_INCR);
     self.0 % max
   }
+}
 
-  pub fn within(&mut self, min: usize, max: usize) -> usize {
-    self.generate(max - min) + min
+pub struct ColoredPoint {
+  pub point: Point,
+  pub color: u8,
+}
+
+impl Deref for ColoredPoint {
+  type Target = Point;
+  fn deref(&self) -> &Self::Target {
+    &self.point
   }
+}
+
+impl DerefMut for ColoredPoint {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut self.point
+  }
+}
+
+pub fn cycle_back<T>(v: &[T], i: &mut usize) -> usize {
+  let r = *i;
+  *i = if r == 0 { v.len() - 1 } else { r - 1 };
+  r
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

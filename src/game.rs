@@ -1,7 +1,7 @@
 use crate::{
   esc::{fg, mv, reset},
-  math::{Direction, Rng},
-  snake::{Arena, ColoredPoint, Effect, Food, Snake, Strategy},
+  math::{ColoredPoint, Direction, Rng},
+  snake::{Arena, Effect, Food, Snake, Strategy},
 };
 use std::{
   fmt::{self, Display, Write},
@@ -58,11 +58,18 @@ impl Game {
 
   pub fn run(&mut self) -> GameResult {
     self.running = true;
-    let mut snakes: [Snake; 5] = [Strategy::Player, Strategy::Eat, Strategy::Kill, Strategy::Speed, Strategy::Score].map(|strat| {
+    let mut snakes: [Snake; 6] = [
+      Strategy::Player,
+      Strategy::Eat,
+      Strategy::Kill,
+      Strategy::Speed,
+      Strategy::Score,
+      Strategy::Cannibal,
+    ]
+    .map(|strat| {
       let mut snake = Snake::random(8, strat, &mut self.rng, &self.arena.size);
       if matches!(strat, Strategy::Player) {
         snake.name = "You";
-        snake.color = 84;
       }
       snake
     });
@@ -70,6 +77,7 @@ impl Game {
       Food::random(Effect::None, &mut self.rng, &self.arena.size),
       Food::random(Effect::Speed, &mut self.rng, &self.arena.size),
       Food::random(Effect::Nourish, &mut self.rng, &self.arena.size),
+      Food::random(Effect::Cannibal, &mut self.rng, &self.arena.size),
     ];
 
     while self.running {
@@ -82,8 +90,8 @@ impl Game {
             let target = snakes[i].find_target(&snakes, &food);
             Snake::seek(&mut snakes, i, &target, &self.arena.size);
           }
-          Snake::serpentine(&mut snakes, i, &self.arena);
-          snakes[i].eat(&mut self.rng, &mut food, &self.arena);
+          Snake::eat(&mut snakes, i, &mut self.rng, &mut food, &self.arena);
+          Snake::serpentine(&mut snakes, i, &mut self.rng, &self.arena);
         }
       }
 
@@ -152,15 +160,17 @@ impl Game {
   }
 
   fn render_stats(&mut self, player: &Snake) -> fmt::Result {
+    mv(&mut self.frame, &(self.arena.position + (0, -2)))?;
     if self.debug {
       let fps = TIME_US / self.delta.elapsed().as_micros();
-      mv(&mut self.frame, &(self.arena.position + (0, -2)))?;
       write!(
         &mut self.frame,
         "{fps} FPS | T: {:03} | B: {:03}",
         self.top_halves.len(),
         self.bottom_halves.len(),
       )?;
+    } else {
+      write!(&mut self.frame, "Press F for Debug information")?;
     }
 
     mv(&mut self.frame, &(self.arena.position + (0, -1)))?;
