@@ -18,7 +18,7 @@ pub struct Snake {
   delta: Instant,
   alive: bool,
   strat: Strategy,
-  pub cannibal: Instant,
+  cannibal: Instant,
 }
 
 impl Snake {
@@ -211,8 +211,8 @@ impl Snake {
 
     match self.strat {
       Strategy::Player => unreachable!("Player has it's own mind"),
-      Strategy::Speed => locate_food(food, Effect::Speed),
-      Strategy::Score => locate_food(food, Effect::Nourish),
+      Strategy::Speed => locate_food(food, self.head(), Effect::Speed),
+      Strategy::Score => locate_food(food, self.head(), Effect::Nourish),
       Strategy::Eat => food
         .iter()
         .min_by_key(|food| self.head().quick_distance(food))
@@ -227,10 +227,10 @@ impl Snake {
         {
           target
         } else {
-          locate_food(food, Effect::Speed)
+          locate_food(food, self.head(), Effect::Speed)
         }
       }
-      Strategy::Cannibal => locate_food(food, if self.is_cannibal() { Effect::Speed } else { Effect::Cannibal }),
+      Strategy::Cannibal => locate_food(food, self.head(), if self.is_cannibal() { Effect::Speed } else { Effect::Cannibal }),
     }
   }
 
@@ -326,6 +326,17 @@ pub enum Effect {
   Cannibal,
 }
 
+impl From<usize> for Effect {
+  fn from(value: usize) -> Self {
+    match value % 4 {
+      0 => Effect::None,
+      1 => Effect::Speed,
+      2 => Effect::Nourish,
+      _ => Effect::Cannibal,
+    }
+  }
+}
+
 const EFFECT_SECONDS: u64 = 10;
 
 #[derive(Clone, Copy)]
@@ -396,6 +407,11 @@ impl Food {
   }
 }
 
-pub fn locate_food(food: &[Food], effect: Effect) -> Point {
-  food.iter().find(|food| food.effect == effect).map(|food| food.position).unwrap()
+pub fn locate_food(food: &[Food], head: &Point, effect: Effect) -> Point {
+  food
+    .iter()
+    .filter(|food| food.effect == effect)
+    .map(|food| food.position)
+    .min_by_key(|food| head.quick_distance(food))
+    .unwrap()
 }

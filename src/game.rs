@@ -75,12 +75,7 @@ impl Game {
       }
       snake
     });
-    let mut food = [
-      Food::random(Effect::None, &mut self.rng, &self.arena.size),
-      Food::random(Effect::Speed, &mut self.rng, &self.arena.size),
-      Food::random(Effect::Nourish, &mut self.rng, &self.arena.size),
-      Food::random(Effect::Cannibal, &mut self.rng, &self.arena.size),
-    ];
+    let mut food: [Food; 12] = std::array::from_fn(|i| Food::random(Effect::from(i), &mut self.rng, &self.arena.size));
 
     while self.running {
       self.handle_input(&mut snakes[0])?;
@@ -110,8 +105,8 @@ impl Game {
           food.render(&mut self.frame, &self.arena.position)?;
         }
 
-        self.render_ui(&snakes[0])?;
         self.render_scoreboard(&snakes)?;
+        self.render_ui(&snakes[0])?;
         println!("{}", self.frame);
         self.top_halves.clear();
         self.bottom_halves.clear();
@@ -127,7 +122,7 @@ impl Game {
   fn render_scoreboard(&mut self, snakes: &[Snake]) -> fmt::Result {
     let mut scores: Box<[(u8, &str, usize)]> = snakes.iter().map(|snake| (snake.color, snake.name, snake.len())).collect();
     scores.sort_by_key(|(_, _, score)| usize::MAX - *score);
-    let mut position = self.arena.position + (self.arena.size.x as i8 + 2, 1);
+    let mut position = self.arena.position + ((self.arena.size.x + 2) as i8, 1);
     for (color, name, score) in scores.iter() {
       mv(&mut self.frame, &position)?;
       fg(&mut self.frame, *color)?;
@@ -199,14 +194,13 @@ impl Game {
     mv(&mut self.frame, &(self.arena.position + (0, -1)))?;
     write!(
       &mut self.frame,
-      "SPEED: {}/255 | SCORE: {} | COORDS: {:03}:{:03} | ARENA SIZE: {:03}:{:03} {:?}",
+      "SPEED: {}/255 | SCORE: {} | COORDS: {:03}:{:03} | ARENA SIZE: {:03}:{:03}",
       player.speed(),
       player.len(),
       player.head().x,
       player.head().y,
       self.arena.size.x,
       self.arena.size.y,
-      player.cannibal.elapsed().as_secs(),
     )
   }
 }
