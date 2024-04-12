@@ -11,7 +11,7 @@ checksum = "9c198f91728a82281a64e1f4f9eeb25d82cb32a5de251c6bd1b5154d63a8e7bd"
 [[package]]
 name = "readln"
 version = "0.1.0"
-source = "git+https://github.com/Stuff7/readlnrs?branch=bytes#43877a825b2fd2300c35562a3a7c30d615e791aa"
+source = "git+https://github.com/Stuff7/readlnrs?branch=bytes#c9647f05a880a1dc3afd150147eeefd4f4ecf8ba"
 dependencies = [
  "libc",
  "windows-sys",

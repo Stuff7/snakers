@@ -13,7 +13,7 @@ pub struct Point {
 }
 
 impl Point {
-  pub fn new(x: u8, y: u8) -> Self {
+  pub const fn new(x: u8, y: u8) -> Self {
     Self { x, y }
   }
 
@@ -71,12 +71,47 @@ impl Point {
   }
 }
 
+impl From<(u32, u32)> for Point {
+  fn from(value: (u32, u32)) -> Self {
+    Self {
+      x: value.0 as u8,
+      y: value.1 as u8,
+    }
+  }
+}
+
+impl std::ops::Sub for Point {
+  type Output = Point;
+  fn sub(self, rhs: Self) -> Self::Output {
+    Self {
+      x: self.x.saturating_sub(rhs.x),
+      y: self.y.saturating_sub(rhs.y),
+    }
+  }
+}
+
+impl std::ops::SubAssign for Point {
+  fn sub_assign(&mut self, rhs: Self) {
+    *self = *self - rhs;
+  }
+}
+
 impl std::ops::Add<(i8, i8)> for Point {
   type Output = Point;
   fn add(self, rhs: (i8, i8)) -> Self::Output {
     Self {
       x: self.x.wrapping_add_signed(rhs.0),
       y: self.y.wrapping_add_signed(rhs.1),
+    }
+  }
+}
+
+impl std::ops::Add<(i32, i32)> for Point {
+  type Output = Point;
+  fn add(self, rhs: (i32, i32)) -> Self::Output {
+    Self {
+      x: std::cmp::min(255, std::cmp::max(self.x as i32 + rhs.0, 0)) as u8,
+      y: std::cmp::min(255, std::cmp::max(self.y as i32 + rhs.1, 0)) as u8,
     }
   }
 }

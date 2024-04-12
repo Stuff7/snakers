@@ -1,7 +1,8 @@
 use crate::{
   esc::{fg, mv, reset},
-  math::{ColoredPoint, Direction, Rng},
-  snake::{Arena, Effect, Food, Snake, Strategy},
+  map::{Arena, Effect, Food, Strategy},
+  math::{ColoredPoint, Direction, Point, Rng},
+  snake::Snake,
 };
 use std::{
   fmt::{self, Display, Write},
@@ -10,6 +11,7 @@ use std::{
 };
 
 pub struct Game {
+  termsize: Point,
   rng: Rng,
   top_halves: Vec<ColoredPoint>,
   bottom_halves: Vec<ColoredPoint>,
@@ -27,11 +29,13 @@ const TIME_US: u128 = 1_000_000;
 
 impl Game {
   pub fn new() -> Self {
+    let termsize = readln::signals::term_size().unwrap().into();
     Self {
+      termsize,
       rng: Rng::new(),
       top_halves: Vec::with_capacity(1 << 7),
       bottom_halves: Vec::with_capacity(1 << 7),
-      arena: Arena::new(2, 2, 32, 15),
+      arena: Arena::new(termsize.x / 4, termsize.y / 10, termsize.x / 2, termsize.y * 4 / 5),
       delta: Instant::now(),
       running: false,
       paused: true,
@@ -39,18 +43,6 @@ impl Game {
       debug: false,
       frame: String::from(CLEAR),
     }
-  }
-
-  pub fn resize_arena(&mut self, w: u8, h: u8) -> &mut Self {
-    self.arena.size.x = w;
-    self.arena.size.y = h;
-    self
-  }
-
-  pub fn move_arena(&mut self, x: u8, y: u8) -> &mut Self {
-    self.arena.position.x = x;
-    self.arena.position.y = y;
-    self
   }
 
   pub fn fps(&mut self, fps: usize) -> &mut Self {
@@ -78,8 +70,12 @@ impl Game {
     let mut food: [Food; 12] = std::array::from_fn(|i| Food::random(Effect::from(i), &mut self.rng, &self.arena.size));
 
     while self.running {
-      self.handle_input(&mut snakes[0])?;
+      self.handle_input(&mut snakes[0], &mut food)?;
       let delta = self.delta.elapsed().as_micros();
+
+      if readln::signals::term_resized(0) {
+        self.termsize = readln::signals::term_size().unwrap().into();
+      }
 
       if !self.paused {
         for i in 0..snakes.len() {
@@ -95,7 +91,7 @@ impl Game {
       }
 
       if delta >= self.frame_duration_us {
-        write!(&mut self.frame, "{}", self.arena)?;
+        self.arena.render(&mut self.frame, &self.termsize, &mut food)?;
 
         for snake in &snakes {
           snake.render(&mut self.frame, &self.arena, &mut self.top_halves, &mut self.bottom_halves)?;
@@ -122,7 +118,7 @@ impl Game {
   fn render_scoreboard(&mut self, snakes: &[Snake]) -> fmt::Result {
     let mut scores: Box<[(u8, &str, usize)]> = snakes.iter().map(|snake| (snake.color, snake.name, snake.len())).collect();
     scores.sort_by_key(|(_, _, score)| usize::MAX - *score);
-    let mut position = self.arena.position + ((self.arena.size.x + 2) as i8, 1);
+    let mut position = self.arena.position + ((self.arena.size.x + 2) as i32, 1);
     for (color, name, score) in scores.iter() {
       mv(&mut self.frame, &position)?;
       fg(&mut self.frame, *color)?;
@@ -132,7 +128,7 @@ impl Game {
     reset(&mut self.frame)
   }
 
-  fn handle_input(&mut self, player: &mut Snake) -> GameResult {
+  fn handle_input(&mut self, player: &mut Snake, food: &mut [Food]) -> GameResult {
     match readln::getch(0) {
       Ok(b) => match b {
         b'w' => player.steer(Direction::Up),
@@ -144,9 +140,9 @@ impl Game {
         67 => self.arena.position.x = self.arena.position.x.saturating_add(1),
         68 => self.arena.position.x = self.arena.position.x.saturating_sub(1),
         b'k' => self.arena.size.y = self.arena.size.y.saturating_add(1),
-        b'j' => self.arena.size.y = self.arena.size.y.saturating_sub(1),
+        b'j' => self.arena.shrink_height(1, food),
         b'l' => self.arena.size.x = self.arena.size.x.saturating_add(1),
-        b'h' => self.arena.size.x = self.arena.size.x.saturating_sub(1),
+        b'h' => self.arena.shrink_width(1, food),
         b'f' => self.debug = !self.debug,
         b'p' => self.paused = !self.paused,
         b'q' => self.running = false,
@@ -174,18 +170,24 @@ impl Game {
     }
 
     if self.paused {
-      let mut center = self.arena.position + ((self.arena.size.x as i8 / 2) - 22, 0);
+      let mut center = self.arena.position + ((self.arena.size.x as i32 / 2) - 22, 0);
       fg(&mut self.frame, 84)?;
       for ln in LOGO.lines() {
         mv(&mut self.frame, &center)?;
         write!(&mut self.frame, "{}", ln)?;
         center.y += 1;
       }
+      let first_y = center.y + 1;
       mv(&mut self.frame, &center)?;
       reset(&mut self.frame)?;
       write!(&mut self.frame, "\x1b[1mControls \x1b[5m(Press P to Play)\x1b[0m")?;
-      for c in CONTROLS {
+      center.x = self.arena.position.x + 1;
+      for (i, c) in CONTROLS.iter().enumerate() {
         center.y += 1;
+        if i != 0 && i % 8 == 0 {
+          center.y = first_y;
+          center.x = center.x.saturating_add(32);
+        }
         mv(&mut self.frame, &center)?;
         write!(&mut self.frame, "{c}")?;
       }
